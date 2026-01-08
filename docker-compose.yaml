@@ -34,3 +34,10 @@ services:
     volumes:
       - ./garage-data:/data
       - ./garage.toml:/etc/garage.toml
+    command: >
+        sh -c "
+        /garage server &
+        sleep 5 &&
+        sh /garage-init.sh &&
+        wait
+        "

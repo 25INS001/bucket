@@ -1,34 +1,43 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from django.http import FileResponse
-from django.shortcuts import get_object_or_404
-from .models import Bucket, Object
+import boto3, os
+from botocore.config import Config
+
+s3 = boto3.client(
+    "s3",
+    endpoint_url=os.environ["GARAGE_ENDPOINT"],
+    aws_access_key_id=os.environ["GARAGE_ACCESS_KEY"],
+    aws_secret_access_key=os.environ["GARAGE_SECRET_KEY"],
+    region_name=os.environ["GARAGE_REGION"],
+    config=Config(
+        signature_version="s3v4",
+        s3={"addressing_style": "path"},  # 🔥 THIS LINE
+    ),
+)
 
 class ObjectView(APIView):
 
     def get(self, request, bucket_name, key):
-        obj = get_object_or_404(
-            Object,
-            bucket__name=bucket_name,
-            key=key
+        url = s3.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": bucket_name,
+                "Key": key,
+            },
+            ExpiresIn=300,
         )
-        return FileResponse(obj.file.open(), as_attachment=False)
-
+        url = url.replace("http://localhost:8088", "http://localhost:8088/s3", 1)
+        print("Get",url)
+        return Response({"download_url": url})
     def put(self, request, bucket_name, key):
-        file = request.FILES.get('file')
-        if not file:
-            return Response({"error": "No file"}, status=400)
-
-        bucket, _ = Bucket.objects.get_or_create(name=bucket_name)
-
-        obj, _ = Object.objects.update_or_create(
-            bucket=bucket,
-            key=key,
-            defaults={"file": file}
+        url = s3.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": bucket_name,
+                "Key": key,
+            },
+            ExpiresIn=300,
         )
-
-        return Response({
-            "bucket": bucket.name,
-            "key": obj.key,
-            "url": obj.file.url
-        })
+        url = url.replace("http://localhost:8088", "http://localhost:8088/s3", 1)
+        print("Post",url)
+        return Response({"upload_url": url})

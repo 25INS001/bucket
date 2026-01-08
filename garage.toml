@@ -1,0 +1,15 @@
+metadata_dir = "/data/meta"
+data_dir = "/data/blocks"
+db_engine = "sqlite"
+
+replication_factor = 1
+replication_mode = "none"
+rpc_bind_addr = "0.0.0.0:3901"
+rpc_secret = "bb503af8715838cfc73eb245b7d94eb369a61c9be51fa18d5a42f41c541011f2"
+
+[s3_api]
+api_bind_addr = "0.0.0.0:3900"
+s3_region = "garage"
+
+[admin]
+api_bind_addr = "0.0.0.0:3902"

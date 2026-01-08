@@ -1,0 +1,10 @@
+services:
+  garage:
+    image: dxflrs/garage:v0.9.3
+    container_name: garage
+    ports:
+      - "3900:3900"   # S3 API
+      - "3902:3902"   # Admin
+    volumes:
+      - ./garage-data:/data
+      - ./garage.toml:/etc/garage.toml

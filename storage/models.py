@@ -10,9 +10,6 @@ class Bucket(models.Model):
 
 class Object(models.Model):
     bucket = models.ForeignKey(Bucket, on_delete=models.CASCADE)
-    file = models.FileField(upload_to='buckets/')
-    key = models.CharField(max_length=255)
-
-    def save(self, *args, **kwargs):
-        self.file.name = f"{self.bucket.name}/{self.key}"
-        super().save(*args, **kwargs)
+    key = models.CharField(max_length=512)
+    size = models.BigIntegerField(null=True)
+    created_at = models.DateTimeField(auto_now_add=True)

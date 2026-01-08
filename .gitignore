@@ -6,3 +6,7 @@ migrations/
 
 # Database
 db.sqlite3
+
+garage-data/
+*.txt
+.env

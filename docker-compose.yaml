@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "8088:8088"          # 👈 non-80 port
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - bucket
+      - garage
+
+  bucket:
+    build: .
+    container_name: django-bucket
+    expose:
+      - "8000"
+    volumes:
+      - ./media:/app/media
+      - ./db.sqlite3:/app/db.sqlite3
+    env_file:
+      - .env
+    depends_on:
+      - garage
+
+  garage:
+    image: dxflrs/garage:v0.9.3
+    container_name: garage
+    expose:
+      - "3900"
+      - "3902"
+    volumes:
+      - ./garage-data:/data
+      - ./garage.toml:/etc/garage.toml

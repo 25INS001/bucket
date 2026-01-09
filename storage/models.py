@@ -1,15 +1,26 @@
+import uuid
 from django.db import models
 
-class Bucket(models.Model):
-    name = models.CharField(max_length=100, unique=True)
-    is_public = models.BooleanField(default=False)
+class ObjectMetadata(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
+    )
 
-    def __str__(self):
-        return self.name
+    bucket = models.CharField(max_length=128)
 
+    object_key = models.TextField(unique=True)
 
-class Object(models.Model):
-    bucket = models.ForeignKey(Bucket, on_delete=models.CASCADE)
-    key = models.CharField(max_length=512)
-    size = models.BigIntegerField(null=True)
+    original_filename = models.CharField(
+        max_length=255, null=True, blank=True
+    )
+
+    size = models.BigIntegerField(null=True, blank=True)
+    content_type = models.CharField(max_length=128, null=True, blank=True)
+    checksum = models.CharField(max_length=128, null=True, blank=True)
+
+    is_uploaded = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)

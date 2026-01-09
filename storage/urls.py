@@ -2,5 +2,8 @@ from django.urls import path
 from .views import ObjectView
 
 urlpatterns = [
-    path('<str:bucket_name>/<path:key>', ObjectView.as_view()),
+    # Upload and Download
+    path("objects/", ObjectView.as_view()),                  # POST
+    path("objects/<uuid:object_id>/", ObjectView.as_view()) # GET
+
 ]

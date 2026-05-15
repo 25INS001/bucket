@@ -42,12 +42,13 @@ jobs:
         env:
           DJANGO_SECRET_KEY: ci-secret
           DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver
-          GARAGE_ENDPOINT: http://127.0.0.1:8333
+          GARAGE_ENDPOINT: "http://127.0.0.1:8333"
           GARAGE_ACCESS_KEY: test
           GARAGE_SECRET_KEY: test
           GARAGE_REGION: us-east-1
         run: |
           python manage.py check
+          python manage.py makemigrations --check --dry-run
           python manage.py test --verbosity 2
 
   build_push_deploy:

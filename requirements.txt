@@ -6,3 +6,4 @@ packaging==25.0
 python-magic==0.4.27
 sqlparse==0.5.4
 boto3
+psycopg[binary]==3.2.9

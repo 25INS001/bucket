@@ -10,22 +10,31 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
-
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-2*0)2twh(!0+8b%axb^9r@1x!td2(i$mfbr25%$_9va_#6#q)3'
+# Supplied via the environment — never hardcoded. See the root .env.example.
+SECRET_KEY = os.environ.get("BUCKET_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "BUCKET_SECRET_KEY is not set. Generate one with:\n"
+        "  python -c \"from django.core.management.utils import "
+        "get_random_secret_key as k; print(k())\""
+    )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("BUCKET_DEBUG", "False").lower() in ("1", "true", "yes")
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.environ.get("BUCKET_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if h.strip()
+]
 
 # Media
 MEDIA_URL = '/media/'
@@ -78,10 +87,27 @@ WSGI_APPLICATION = 'bucket.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
+# Backed by the postgres service in docker-compose.yml, whose state lives in
+# the postgres_data volume. The previous sqlite file sat inside the container
+# filesystem, so every rebuild silently discarded the metadata table.
+def _required_db(name):
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"{name} is not set. Copy .env.example to .env at the repository "
+            f"root and fill it in."
+        )
+    return value
+
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': _required_db("POSTGRES_DB"),
+        'USER': _required_db("POSTGRES_USER"),
+        'PASSWORD': _required_db("POSTGRES_PASSWORD"),
+        'HOST': os.environ.get("POSTGRES_HOST", "postgres"),
+        'PORT': os.environ.get("POSTGRES_PORT", "5432"),
     }
 }
 

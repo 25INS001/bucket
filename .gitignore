@@ -2,7 +2,10 @@
 venv/
 __pycache__/
 media/
-migrations/
+
+# NOTE: migrations/ used to be ignored here. Django migrations are source, not
+# build output — without them a fresh database has no storage_objectmetadata
+# table and every /bucket/ request fails. They must be committed.
 
 # Database
 db.sqlite3

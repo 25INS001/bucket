@@ -23,6 +23,22 @@ jobs:
   test:
     name: Django tests
     runs-on: ubuntu-24.04
+    # settings.py requires Postgres and no longer falls back to sqlite, so the
+    # suite needs a real server to create its test database against.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: bucket_ci
+          POSTGRES_USER: bucket_ci
+          POSTGRES_PASSWORD: bucket_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bucket_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,8 +56,15 @@ jobs:
           pip install -r requirements.txt
       - name: Run Django checks and tests
         env:
-          DJANGO_SECRET_KEY: ci-secret
-          DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+          # settings.py reads BUCKET_*, not DJANGO_*. Throwaway CI values: the
+          # key only has to exist for `check` and the test client.
+          BUCKET_SECRET_KEY: ci-secret
+          BUCKET_ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: bucket_ci
+          POSTGRES_USER: bucket_ci
+          POSTGRES_PASSWORD: bucket_ci
           GARAGE_ENDPOINT: "http://127.0.0.1:8333"
           GARAGE_ACCESS_KEY: test
           GARAGE_SECRET_KEY: test

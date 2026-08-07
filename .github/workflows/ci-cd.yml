@@ -107,7 +107,10 @@ jobs:
           fi
           [[ "$ENVIRONMENT" == "prod" ]] && echo "namespace=phasicon" >> "$GITHUB_OUTPUT" || echo "namespace=phasicon-dev" >> "$GITHUB_OUTPUT"
           echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
-          echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          # Immutable, sortable and readable: env-YYYYMMDD-HHMM-<short sha>.
+          # The deploy step pins this exact tag rather than <env>-latest, so a
+          # rollout records which build it is running and can be rolled back to.
+          echo "tag=${ENVIRONMENT}-$(date -u +%Y%m%d-%H%M)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v6
         with:

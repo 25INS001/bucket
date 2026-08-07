@@ -151,12 +151,17 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          mkdir -p /tmp/digests
-          touch "/tmp/digests/${DIGEST#sha256:}"
+          # Wiped first, and under runner.temp rather than /tmp: on a
+          # self-hosted runner the filesystem persists between jobs, so a
+          # digest left by an earlier run was being uploaded alongside this
+          # one and the merge then referenced an image that no longer exists.
+          rm -rf "${{ runner.temp }}/digests"
+          mkdir -p "${{ runner.temp }}/digests"
+          touch "${{ runner.temp }}/digests/${DIGEST#sha256:}"
       - uses: actions/upload-artifact@v4
         with:
           name: digests-${{ matrix.arch }}
-          path: /tmp/digests/*
+          path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
 

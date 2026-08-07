@@ -212,5 +212,9 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/kube_deploy_key
           chmod 600 ~/.ssh/kube_deploy_key
           ssh-keyscan -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/kube_deploy_key -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
+          # Keepalives matter: `rollout status` holds the connection open with no
+          # traffic for up to 300s, and without them the session is dropped
+          # mid-wait and the job fails even though the rollout succeeded.
+          ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=40 \
+            -i ~/.ssh/kube_deploy_key -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
             "kubectl -n '$NAMESPACE' set image deployment/${DEPLOYMENT_NAME} ${CONTAINER_NAME}='$IMAGE' && kubectl -n '$NAMESPACE' rollout status deployment/${DEPLOYMENT_NAME} --timeout=300s"

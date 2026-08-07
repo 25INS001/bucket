@@ -74,23 +74,15 @@ jobs:
           python manage.py makemigrations --check --dry-run
           python manage.py test --verbosity 2
 
-  build_push_deploy:
-    name: Build, push image, and deploy
+  prepare:
+    name: Resolve deploy target
     runs-on: ubuntu-24.04
-    needs: test
     if: github.event_name != 'pull_request'
-    permissions:
-      contents: read
-      packages: write
+    outputs:
+      environment: ${{ steps.target.outputs.environment }}
+      namespace: ${{ steps.target.outputs.namespace }}
+      tag: ${{ steps.target.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve deploy target
         id: target
         shell: bash
@@ -108,27 +100,110 @@ jobs:
           [[ "$ENVIRONMENT" == "prod" ]] && echo "namespace=phasicon" >> "$GITHUB_OUTPUT" || echo "namespace=phasicon-dev" >> "$GITHUB_OUTPUT"
           echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
           # Immutable, sortable and readable: env-YYYYMMDD-HHMM-<short sha>.
-          # The deploy step pins this exact tag rather than <env>-latest, so a
-          # rollout records which build it is running and can be rolled back to.
+          # Resolved once here so both architectures and the deploy agree on it.
           echo "tag=${ENVIRONMENT}-$(date -u +%Y%m%d-%H%M)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-      - name: Build and push multi-arch image
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: [test, prepare]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: [self-hosted, linux, X64]
+          - arch: arm64
+            platform: linux/arm64
+            runner: [self-hosted, linux, ARM64]
+    # Native builders, one per architecture. Emulating arm64 under QEMU made
+    # this job take hours; these machines also keep their build cache between
+    # runs, which a GitHub-hosted runner throws away every time.
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.target.outputs.tag }}
-            ${{ env.IMAGE_NAME }}:${{ steps.target.outputs.environment }}-latest
+          platforms: ${{ matrix.platform }}
+          # No tag here: each architecture is pushed as a bare digest and the
+          # merge job below is what names the result. Tagging per architecture
+          # would leave the two halves fighting over the same tag.
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          # No cache-from/to on purpose. type=gha would ship the whole C++
+          # layer cache over the network on every run, which costs more than
+          # it saves on a machine that already holds the layers locally.
+      - name: Export digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge multi-arch manifest
+    needs: [prepare, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.tag }} \
+            -t ${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.environment }}-latest \
+            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+      - name: Show what was published
+        run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.tag }}
+
+  deploy:
+    name: Deploy to Kubernetes
+    needs: [prepare, merge]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
       - name: Deploy to Kubernetes
         env:
           SSH_HOST: ${{ secrets.KUBE_SSH_HOST }}
           SSH_USER: ${{ secrets.KUBE_SSH_USER }}
           SSH_KEY: ${{ secrets.KUBE_SSH_PRIVATE_KEY }}
           SSH_PORT: ${{ secrets.KUBE_SSH_PORT }}
-          NAMESPACE: ${{ steps.target.outputs.namespace }}
-          IMAGE: ${{ env.IMAGE_NAME }}:${{ steps.target.outputs.tag }}
+          NAMESPACE: ${{ needs.prepare.outputs.namespace }}
+          IMAGE: ${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.tag }}
         run: |
           test -n "$SSH_HOST"
           test -n "$SSH_USER"

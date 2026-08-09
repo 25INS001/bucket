@@ -14,6 +14,13 @@ on:
         type: choice
         options: [dev, prod]
 
+# One run per branch at a time. A slow run that finishes after a newer one
+# would otherwise deploy its older image on top: auth-service's two-hour
+# QEMU-era run landed after a later build and reverted dev to a stale tag.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   IMAGE_NAME: ghcr.io/25ins001/phasicon-bucket
   DEPLOYMENT_NAME: bucket

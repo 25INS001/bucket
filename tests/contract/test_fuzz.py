@@ -1,13 +1,19 @@
 """Hostile input against the bucket API.
 
-ObjectView.post indexes the parsed body directly:
+ObjectView.post used to index the parsed body directly:
 
     bucket_name = request.data["bucket"]
     filename    = request.data["filename"]
 
 DRF does not turn a KeyError into a 400 — it propagates, and the request 500s.
-So "a required field is missing" and "the body is the wrong shape" are the same
-bug class here, and both are recorded below.
+So "a required field is missing" and "the body is the wrong shape" were the same
+bug class, and a wrong-typed value was a third variant of it: a non-string
+filename raised inside generate_object_key, a non-integer size raised inside the
+INSERT after the row was half-built.
+
+All three now resolve to a 400 before anything is written or signed. The tests
+below still cover each variant separately, because they failed in three
+different places and a partial regression would only bring one of them back.
 """
 
 import uuid
@@ -44,24 +50,19 @@ def assert_no_server_error(resp, what):
 # Missing and malformed bodies
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PHAS-BUCKET-KEYERR: ObjectView.post reads request.data['bucket'] and "
-        "['filename'] with no validation. A body missing either raises KeyError, "
-        "which DRF does not translate, so the caller gets a 500 instead of a "
-        "400. Fix: a serializer, or .get() with an explicit error response."
-    ),
-)
 @pytest.mark.parametrize(
     "body",
-    [{}, {"bucket": "uploads"}, {"filename": "a.bin"}],
-    ids=["empty", "no-filename", "no-bucket"],
+    [{}, {"bucket": "uploads"}, {"filename": "a.bin"},
+     {"bucket": "uploads", "filename": ""}, {"bucket": "", "filename": "a.bin"}],
+    ids=["empty", "no-filename", "no-bucket", "blank-filename", "blank-bucket"],
 )
-def test_missing_required_field_returns_500_not_400(api, fake_s3, body):
+def test_missing_required_field_is_a_400(api, fake_s3, body):
+    """These used to read request.data['bucket'] directly. DRF does not
+    translate a KeyError, so a missing field was a 500."""
     resp = api.post(OBJECTS, body, content_type="application/json")
     assert_no_server_error(resp, f"POST with body {body}")
+    assert resp.status_code == 400, f"body {body} returned {resp.status_code}"
+    assert resp.json()["error"] == "bucket and filename are required"
 
 
 @pytest.mark.parametrize(
@@ -78,29 +79,20 @@ def test_unparseable_bodies_are_rejected_cleanly(api, fake_s3, raw, description)
     assert resp.status_code == 400, f"a {description} body returned {resp.status_code}"
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PHAS-BUCKET-KEYERR: an empty body parses to {} rather than failing, so "
-        "it reaches request.data['bucket'] and raises KeyError like any other "
-        "missing field."
-    ),
-)
 def test_an_empty_body_is_a_missing_field_not_a_parse_error(api, fake_s3):
+    """An empty body parses to {} rather than failing, so it is handled by the
+    missing-field path rather than by DRF's parser."""
     resp = api.post(OBJECTS, b"", content_type="application/json")
     assert_no_server_error(resp, "POST with an empty body")
+    assert resp.status_code == 400
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason="PHAS-BUCKET-KEYERR: a non-object body indexes into a list or string.",
-)
 @pytest.mark.parametrize("raw", [b"[]", b'"str"', b"123"], ids=["array", "string", "number"])
-def test_non_object_bodies_crash(api, fake_s3, raw):
+def test_non_object_bodies_are_a_400(api, fake_s3, raw):
+    """A body that parses but is not an object used to be indexed into."""
     resp = api.post(OBJECTS, raw, content_type="application/json")
     assert_no_server_error(resp, "POST with a non-object body")
+    assert resp.status_code == 400
 
 
 # --------------------------------------------------------------------------- #
@@ -145,65 +137,77 @@ def test_sql_injection_does_not_widen_the_latest_lookup(api, fake_s3, object_fac
 
 
 @pytest.mark.parametrize("value", [[], {}, {"$ne": None}], ids=["list", "dict", "operator"])
-def test_container_typed_filename_survives_by_accident(api, fake_s3, value):
-    """generate_object_key does `"." in filename`, which is a valid membership
-    test on a list or dict — so these produce an extensionless key instead of
-    raising. Pinned as the accident it is, not as intended behaviour."""
-    resp = api.post(
-        OBJECTS, {"bucket": "uploads", "filename": value}, content_type="application/json"
-    )
-    assert_no_server_error(resp, f"POST with filename={value!r}")
+def test_container_typed_filename_is_a_400(api, fake_s3, value):
+    """These used to survive by accident rather than by design.
 
-
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PHAS-BUCKET-NOVALIDATION: generate_object_key runs `\".\" in filename` "
-        "and then filename.split('.'). A scalar non-string — int, bool, None — "
-        "is not iterable, so the request 500s. Fix: validate filename is a "
-        "non-empty string before building the key."
-    ),
-)
-@pytest.mark.parametrize("value", [12345, True, None], ids=["int", "bool", "null"])
-def test_scalar_non_string_filename_crashes_key_generation(api, fake_s3, value):
-    resp = api.post(
-        OBJECTS, {"bucket": "uploads", "filename": value}, content_type="application/json"
-    )
-    assert_no_server_error(resp, f"POST with filename={value!r}")
-
-
-def test_a_negative_size_is_accepted(api, fake_s3):
-    """size is a BigIntegerField, so a negative value stores without complaint.
-
-    Recorded rather than asserted as correct: nothing reads size for a decision
-    today, so a wrong value is cosmetic — but it is unvalidated.
+    generate_object_key does `"." in filename`, which is a valid membership test
+    on a list or a dict, so a container filename produced an extensionless key
+    and a stored row instead of raising. It is now rejected like any other
+    non-string.
     """
+    resp = api.post(
+        OBJECTS, {"bucket": "uploads", "filename": value}, content_type="application/json"
+    )
+    assert_no_server_error(resp, f"POST with filename={value!r}")
+    assert resp.status_code == 400, f"filename={value!r} returned {resp.status_code}"
+
+
+@pytest.mark.parametrize("value", [12345, True, None], ids=["int", "bool", "null"])
+def test_scalar_non_string_filename_is_a_400(api, fake_s3, value):
+    """generate_object_key runs `"." in filename` then filename.split("."), so a
+    scalar non-string used to raise before anything validated it."""
+    resp = api.post(
+        OBJECTS, {"bucket": "uploads", "filename": value}, content_type="application/json"
+    )
+    assert_no_server_error(resp, f"POST with filename={value!r}")
+    assert resp.status_code == 400, f"filename={value!r} returned {resp.status_code}"
+
+
+def test_a_negative_size_is_rejected(api, fake_s3):
+    """size is a BigIntegerField, so a negative value used to store without
+    complaint. Nothing reads it for a decision today, which is exactly why a
+    wrong value would have gone unnoticed."""
     resp = api.post(
         OBJECTS,
         {"bucket": "uploads", "filename": "a.bin", "size": -1},
         content_type="application/json",
     )
-    assert_no_server_error(resp, "POST with size=-1")
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "size must be a non-negative integer"
 
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PHAS-BUCKET-NOVALIDATION: size goes straight into a BigIntegerField. "
-        "A string, list or dict raises inside the field's get_prep_value during "
-        "the INSERT, so the request 500s after the row is half-built."
-    ),
-)
-@pytest.mark.parametrize("value", ["abc", [], {}], ids=["str", "list", "dict"])
-def test_wrong_typed_size_crashes_the_insert(api, fake_s3, value):
+def test_a_zero_size_is_allowed(api, fake_s3):
+    """Zero is a legitimate size — an empty file — and must not be confused
+    with absent by a truthiness check."""
+    resp = api.post(
+        OBJECTS,
+        {"bucket": "uploads", "filename": "empty.bin", "size": 0},
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.parametrize("value", ["abc", [], {}, True], ids=["str", "list", "dict", "bool"])
+def test_wrong_typed_size_is_a_400(api, fake_s3, value):
+    """size used to go straight into a BigIntegerField and raise inside the
+    INSERT, so the request 500d after the row was half-built."""
     resp = api.post(
         OBJECTS,
         {"bucket": "uploads", "filename": "a.bin", "size": value},
         content_type="application/json",
     )
     assert_no_server_error(resp, f"POST with size={value!r}")
+    assert resp.status_code == 400, f"size={value!r} returned {resp.status_code}"
+
+
+def test_a_rejected_request_creates_no_row(api, fake_s3):
+    """Validation happens before the insert, not during it."""
+    from storage.models import ObjectMetadata
+
+    api.post(OBJECTS, {"bucket": "uploads"}, content_type="application/json")
+    api.post(OBJECTS, {"bucket": "uploads", "filename": "a.bin", "size": "abc"},
+             content_type="application/json")
+    assert ObjectMetadata.objects.count() == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -236,42 +240,82 @@ def test_valid_but_unknown_uuids_are_404(api, fake_s3, candidate):
 # Version allocation under contention
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.defect
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PHAS-BUCKET-RACE: ObjectView.post wraps only the SELECT MAX(version) "
-        "in transaction.atomic(); the create() that uses the result runs "
-        "outside it. Two concurrent uploads of the same file therefore compute "
-        "the same next version and the second violates the "
-        "(bucket, original_filename, version) unique constraint, which "
-        "surfaces as a 500. Fix: put the read and the write in one transaction, "
-        "or use select_for_update."
-    ),
-)
-def test_a_lost_update_on_version_allocation_is_a_500(api, fake_s3, object_factory, monkeypatch):
-    """Simulates the interleaving deterministically.
+def test_a_lost_update_on_version_allocation_is_recovered(api, fake_s3, object_factory,
+                                                          monkeypatch):
+    """A stale version read must not surface as a 500.
 
-    A real thread race is not reproducible enough to gate CI on, so instead the
-    version query is forced to return a stale answer — exactly what the second
-    request sees when both read before either writes.
+    A real thread race is not reproducible enough to gate CI on, so the version
+    query is made to return a stale answer *once* — exactly what the loser of a
+    race sees, having read the maximum before the winner committed. The first
+    attempt then collides with the unique constraint, and the retry has to read
+    the true maximum and take the next number.
+
+    Staleness is injected once rather than permanently on purpose: a permanent
+    stale read would defeat any retry strategy, so a test that did that would
+    fail no matter how the code was written, and prove nothing about the fix.
     """
     from django.db.models.query import QuerySet
 
     object_factory(filename="fw.bin", version=1)
 
     original = QuerySet.aggregate
+    calls = {"n": 0}
 
-    def stale_aggregate(self, *args, **kwargs):
+    def sometimes_stale(self, *args, **kwargs):
         result = original(self, *args, **kwargs)
         if "version__max" in result:
-            result["version__max"] = None  # as if no version existed yet
+            calls["n"] += 1
+            if calls["n"] == 1:
+                result["version__max"] = None  # as if no version existed yet
         return result
 
-    monkeypatch.setattr(QuerySet, "aggregate", stale_aggregate)
+    monkeypatch.setattr(QuerySet, "aggregate", sometimes_stale)
 
-    resp = api.post(OBJECTS, {"bucket": "uploads", "filename": "fw.bin"}, content_type="application/json")
+    resp = api.post(
+        OBJECTS, {"bucket": "uploads", "filename": "fw.bin"}, content_type="application/json"
+    )
+
     assert_no_server_error(resp, "a concurrent upload of the same filename")
+    assert resp.status_code == 200, (
+        f"the losing side of a version race returned {resp.status_code}"
+    )
+    assert calls["n"] >= 2, "the stale read did not trigger a retry"
+
+    from storage.models import ObjectMetadata
+
+    created = ObjectMetadata.objects.get(id=resp.json()["object_id"])
+    assert created.version == 2, (
+        f"the retry allocated version {created.version}, expected 2"
+    )
+
+
+def test_repeated_uploads_of_one_filename_allocate_distinct_versions(api, fake_s3):
+    """The property the retry exists to preserve, checked sequentially.
+
+    A threaded version of this test was tried and removed. The suite runs on
+    in-memory SQLite, which serialises writers with a table lock and raises
+    "database table is locked" rather than exhibiting the interleaving that
+    Postgres would — so the test failed for a reason that had nothing to do
+    with the code under test. Genuine concurrent behaviour needs the live
+    layer and a real Postgres; the deterministic retry test above is the
+    evidence that the recovery path works.
+    """
+    from storage.models import ObjectMetadata
+
+    for _ in range(5):
+        resp = api.post(
+            OBJECTS,
+            {"bucket": "uploads", "filename": "repeated.bin"},
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+
+    versions = sorted(
+        ObjectMetadata.objects.filter(original_filename="repeated.bin").values_list(
+            "version", flat=True
+        )
+    )
+    assert versions == [1, 2, 3, 4, 5], f"versions allocated: {versions}"
 
 
 # --------------------------------------------------------------------------- #

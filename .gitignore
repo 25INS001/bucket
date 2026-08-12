@@ -14,3 +14,7 @@ garage-data/
 *.txt
 .env
 staticfiles/
+.pytest_cache/
+
+# The test suite ships a requirements file; *.txt above would hide it.
+!tests/requirements.txt

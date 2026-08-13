@@ -37,11 +37,23 @@ struct Credentials {
 };
 
 struct PresignRequest {
-    std::string method;    // "GET" or "PUT"
+    std::string method;    // "GET", "PUT" or "HEAD"
     std::string endpoint;  // e.g. "http://s3:8333" — scheme://host[:port]
     std::string bucket;
     std::string key;
     int expiresInSeconds = 300;
+
+    // Emitted in the URL but deliberately NOT signed.
+    //
+    // A URL handed to a browser goes through nginx, which publishes the store
+    // under a prefix ("/s3") and strips it before proxying. So the client
+    // requests /s3/<bucket>/<key> while the store sees /<bucket>/<key> — and
+    // the signature has to match what the STORE sees, not what the client
+    // sent. Signing the prefix would fail verification at the far end; omitting
+    // it from the URL would miss nginx's location entirely.
+    //
+    // Empty for the internal endpoint, where there is no proxy in between.
+    std::string pathPrefix;
 
     // Extra query parameters signed into the URL. Used for
     // response-content-disposition on download and Content-Type on upload.

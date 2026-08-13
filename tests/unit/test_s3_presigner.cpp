@@ -193,6 +193,54 @@ TEST_F(Presign, KeysContainingSpacesAndSlashesSurvive)
 }
 
 // --------------------------------------------------------------------------
+// The public path prefix
+//
+// nginx publishes the store under /s3 and strips it before proxying, so the
+// client requests /s3/<bucket>/<key> while the store verifies /<bucket>/<key>.
+// The prefix therefore has to appear in the URL and NOT in the signature.
+// --------------------------------------------------------------------------
+
+TEST_F(Presign, ThePathPrefixAppearsInTheUrl)
+{
+    req.endpoint = "https://api.example.test";
+    req.pathPrefix = "/s3";
+    EXPECT_NE(url().find("https://api.example.test/s3/uploads/objects/abc.txt?"),
+              std::string::npos);
+}
+
+TEST_F(Presign, ThePathPrefixDoesNotChangeTheSignature)
+{
+    req.endpoint = "https://api.example.test";
+    const std::string without = url();
+
+    req.pathPrefix = "/s3";
+    const std::string with = url();
+
+    auto signature = [](const std::string &u) {
+        return u.substr(u.find("X-Amz-Signature="));
+    };
+    // Same signature: the store sees the stripped path either way. If the
+    // prefix leaked into the canonical request, every proxied URL would fail
+    // verification at SeaweedFS with nothing to explain why.
+    EXPECT_EQ(signature(with), signature(without));
+}
+
+TEST_F(Presign, ATrailingSlashOnThePrefixDoesNotDoubleUp)
+{
+    req.endpoint = "https://api.example.test";
+    req.pathPrefix = "/s3/";
+    EXPECT_EQ(url().find("/s3//uploads"), std::string::npos);
+    EXPECT_NE(url().find("/s3/uploads"), std::string::npos);
+}
+
+TEST_F(Presign, NoPrefixIsTheInternalCase)
+{
+    // The service reaching the store directly has no proxy in between.
+    req.pathPrefix = "";
+    EXPECT_NE(url().find("http://s3:8333/uploads/objects/abc.txt?"), std::string::npos);
+}
+
+// --------------------------------------------------------------------------
 // Refusals
 // --------------------------------------------------------------------------
 

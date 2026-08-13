@@ -16,6 +16,10 @@ POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_SSL_MODE="${POSTGRES_SSL_MODE:-prefer}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 S3_ENDPOINT_URL="${S3_ENDPOINT_URL:-http://s3:8333}"
+# Where a CLIENT reaches the store. Empty falls back to the internal endpoint,
+# which is right only when every client is in-network — a browser handed a URL
+# for http://s3:8333 cannot resolve it.
+PUBLIC_S3_URL="${PUBLIC_S3_URL:-}"
 AUTH_SERVICE_URL="${AUTH_SERVICE_URL:-http://auth-service:8080}"
 DROGON_LOG_LEVEL="${DROGON_LOG_LEVEL:-INFO}"
 
@@ -34,7 +38,7 @@ AWS_SECRET_ACCESS_KEY="$(json_escape "$AWS_SECRET_ACCESS_KEY")"
 
 export POSTGRES_HOST POSTGRES_PORT POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD \
        POSTGRES_SSL_MODE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION \
-       S3_ENDPOINT_URL AUTH_SERVICE_URL DROGON_LOG_LEVEL
+       S3_ENDPOINT_URL PUBLIC_S3_URL AUTH_SERVICE_URL DROGON_LOG_LEVEL
 
 envsubst < /app/src/config.json.template > /app/src/config.json
 chmod 600 /app/src/config.json

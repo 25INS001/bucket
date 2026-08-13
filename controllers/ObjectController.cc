@@ -69,9 +69,11 @@ public:
             return fail(callback, k500InternalServerError, "Could not allocate an object version");
         }
 
+        const PublicEndpoint pub = publicEndpoint();
         s3::PresignRequest presign;
         presign.method = "PUT";
-        presign.endpoint = endpoint();
+        presign.endpoint = pub.origin;
+        presign.pathPrefix = pub.prefix;
         presign.bucket = bucket;
         presign.key = objectKey;
         presign.expiresInSeconds = kUrlTtlSeconds;
@@ -129,9 +131,11 @@ public:
                             "Object store unavailable; try again shortly");
         }
 
+        const PublicEndpoint pub = publicEndpoint();
         s3::PresignRequest presign;
         presign.method = "GET";
-        presign.endpoint = endpoint();
+        presign.endpoint = pub.origin;
+        presign.pathPrefix = pub.prefix;
         presign.bucket = stored->bucket;
         presign.key = stored->objectKey;
         presign.expiresInSeconds = kUrlTtlSeconds;
@@ -198,9 +202,11 @@ public:
         }
         out["downloadable"] = (present == s3::Existence::Present);
         if (present == s3::Existence::Present) {
+            const PublicEndpoint pub = publicEndpoint();
             s3::PresignRequest download;
             download.method = "GET";
-            download.endpoint = endpoint();
+            download.endpoint = pub.origin;
+            download.pathPrefix = pub.prefix;
             download.bucket = stored->bucket;
             download.key = stored->objectKey;
             download.expiresInSeconds = kUrlTtlSeconds;
@@ -246,10 +252,38 @@ private:
         return out.empty() ? "download" : out;
     }
 
+    // Where THIS SERVICE reaches the object store: an in-network hostname, no
+    // proxy in between.
     static std::string endpoint()
     {
         auto custom = app().getCustomConfig();
         return custom["s3"]["endpoint"].asString();
+    }
+
+    // Where a CLIENT reaches it. Usually the public host, with the store
+    // published under a path prefix that nginx strips before proxying.
+    //
+    // These have to be separate. A URL signed for "http://s3:8333" is
+    // unresolvable outside the compose network, so a browser handed one cannot
+    // fetch anything — which is the state the Python service shipped in.
+    // Falls back to the internal endpoint when unset, which is the old
+    // behaviour and correct for a client that is itself in-network.
+    struct PublicEndpoint {
+        std::string origin;  // scheme://host[:port]
+        std::string prefix;  // path nginx strips, e.g. "/s3"
+    };
+
+    static PublicEndpoint publicEndpoint()
+    {
+        auto custom = app().getCustomConfig();
+        std::string url = custom["s3"]["public_url"].asString();
+        if (url.empty()) return {endpoint(), ""};
+
+        const auto sep = url.find("://");
+        if (sep == std::string::npos) return {endpoint(), ""};
+        const auto slash = url.find('/', sep + 3);
+        if (slash == std::string::npos) return {url, ""};
+        return {url.substr(0, slash), url.substr(slash)};
     }
 
     static s3::Credentials credentials()

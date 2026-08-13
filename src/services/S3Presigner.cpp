@@ -177,7 +177,11 @@ std::string presign(const PresignRequest& request,
                                        credentials.region, kService);
     const std::string signature = hmacHex(key, stringToSign);
 
-    return scheme + "://" + host + canonicalUri + "?" + canonicalQuery +
+    // pathPrefix is outside the signature by design — see PresignRequest.
+    std::string prefix = request.pathPrefix;
+    while (!prefix.empty() && prefix.back() == '/') prefix.pop_back();
+
+    return scheme + "://" + host + prefix + canonicalUri + "?" + canonicalQuery +
            "&X-Amz-Signature=" + signature;
 }
 

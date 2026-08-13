@@ -1,0 +1,39 @@
+{
+  "listeners": [
+    { "address": "0.0.0.0", "port": 8000, "https": false }
+  ],
+  "app": {
+    "thread_num": 8,
+    "log_path": "./",
+    "logfile_base_name": "drogon",
+    "log_level": "${DROGON_LOG_LEVEL}"
+  },
+  "db_clients": [
+    {
+      "name": "default",
+      "rdbms": "postgresql",
+      "host": "${POSTGRES_HOST}",
+      "port": ${POSTGRES_PORT},
+      "dbname": "${POSTGRES_DB}",
+      "user": "${POSTGRES_USER}",
+      "passwd": "${POSTGRES_PASSWORD}",
+      "is_fast": false,
+      "number_of_connections": 4,
+      "timeout": 5.0,
+      "client_encoding": "utf8",
+      "ssl_mode": "${POSTGRES_SSL_MODE}"
+    }
+  ],
+  "custom_config": {
+    "s3": {
+      "endpoint": "${S3_ENDPOINT_URL}",
+      "access_key": "${AWS_ACCESS_KEY_ID}",
+      "secret_key": "${AWS_SECRET_ACCESS_KEY}",
+      "region": "${AWS_REGION}"
+    },
+    "auth_service": {
+      "base_url": "${AUTH_SERVICE_URL}",
+      "verify_path": "/api/token/verify"
+    }
+  }
+}

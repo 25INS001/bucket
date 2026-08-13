@@ -1,0 +1,14 @@
+[requires]
+drogon/1.9.6
+openssl/3.2.0
+libcurl/8.4.0
+gtest/1.14.0
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[options]
+drogon/1.9.6:with_postgres=True
+drogon/1.9.6:with_mysql=False
+drogon/1.9.6:with_sqlite=False

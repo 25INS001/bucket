@@ -18,3 +18,10 @@ staticfiles/
 
 # The test suite ships a requirements file; *.txt above would hide it.
 !tests/requirements.txt
+
+# So would the C++ build files, which are source. A blanket *.txt is a sharp
+# edge in a repository whose build system is driven by .txt files: without
+# these the tree clones without a CMakeLists and nothing builds, with no error
+# to explain why.
+!CMakeLists.txt
+!conanfile.txt

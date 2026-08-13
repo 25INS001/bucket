@@ -171,6 +171,48 @@ public:
         out["bucket"] = stored->bucket;
         out["filename"] = stored->originalFilename;
         out["version"] = stored->version;
+
+        // download_url is part of this endpoint's contract — the Python service
+        // returned it and callers use it to fetch in one round trip instead of
+        // two.
+        //
+        // It did so unconditionally, including for a version that was only ever
+        // registered, which handed out a signed link to nothing. Here the same
+        // existence check as getObject() decides: present means a URL, absent
+        // means the metadata without one and downloadable=false, so a caller
+        // can tell "no such file" from "the newest version was never uploaded".
+        const s3::Existence present = s3::headObject(
+            [&] {
+                s3::PresignRequest probe;
+                probe.method = "HEAD";
+                probe.endpoint = endpoint();
+                probe.bucket = stored->bucket;
+                probe.key = stored->objectKey;
+                probe.expiresInSeconds = 60;
+                return s3::presign(probe, credentials());
+            }());
+
+        if (present == s3::Existence::Unavailable) {
+            return fail(callback, k503ServiceUnavailable,
+                        "Object store unavailable; try again shortly");
+        }
+        out["downloadable"] = (present == s3::Existence::Present);
+        if (present == s3::Existence::Present) {
+            s3::PresignRequest download;
+            download.method = "GET";
+            download.endpoint = endpoint();
+            download.bucket = stored->bucket;
+            download.key = stored->objectKey;
+            download.expiresInSeconds = kUrlTtlSeconds;
+            download.queryParams["response-content-disposition"] =
+                "attachment; filename=\"" + sanitiseFilename(stored->originalFilename) + "\"";
+            const std::string url = s3::presign(download, credentials());
+            if (url.empty()) {
+                return fail(callback, k500InternalServerError,
+                            "Could not sign the download URL");
+            }
+            out["download_url"] = url;
+        }
         // Reported for continuity with the previous API. It is NOT what
         // gates downloads any more — nothing writes it, so it is always
         // false. The download path asks S3 instead.

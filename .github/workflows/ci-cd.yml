@@ -28,58 +28,25 @@ env:
 
 jobs:
   test:
-    name: Django tests
+    name: Unit tests
     runs-on: ubuntu-24.04
-    # settings.py requires Postgres and no longer falls back to sqlite, so the
-    # suite needs a real server to create its test database against.
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: bucket_ci
-          POSTGRES_USER: bucket_ci
-          POSTGRES_PASSWORD: bucket_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U bucket_ci"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
+    # No Postgres service and no Python toolchain: the service is C++/Drogon and
+    # the unit suite is deliberately hermetic. S3Presigner has no database, no
+    # Drogon app instance and no network, because signing is the part that has
+    # to be provably correct and a wrong signature produces a well-formed URL
+    # that only fails when a client redeems it.
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements.txt
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libmagic1
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Run Django checks and tests
-        env:
-          # settings.py reads BUCKET_*, not DJANGO_*. Throwaway CI values: the
-          # key only has to exist for `check` and the test client.
-          BUCKET_SECRET_KEY: ci-secret
-          BUCKET_ALLOWED_HOSTS: localhost,127.0.0.1,testserver
-          POSTGRES_HOST: 127.0.0.1
-          POSTGRES_PORT: 5432
-          POSTGRES_DB: bucket_ci
-          POSTGRES_USER: bucket_ci
-          POSTGRES_PASSWORD: bucket_ci
-          GARAGE_ENDPOINT: "http://127.0.0.1:8333"
-          GARAGE_ACCESS_KEY: test
-          GARAGE_SECRET_KEY: test
-          GARAGE_REGION: us-east-1
-        run: |
-          python manage.py check
-          python manage.py makemigrations --check --dry-run
-          python manage.py test --verbosity 2
+      # Built through the image's own dev stage rather than a toolchain
+      # installed on the runner. Same compiler, same Conan dependency set, same
+      # CMake invocation the shipped artifact is built from — so a pass here is
+      # a statement about the code that ships, not about a lookalike build.
+      - name: Build the dev stage
+        run: docker build -f docker/Dockerfile --target dev -t bucket-dev .
+      # PHASICON_BUILD_TESTS defaults ON, so the dev stage has already compiled
+      # bucket-service-tests next to the service binary.
+      - name: Run unit tests
+        run: docker run --rm bucket-dev ctest --test-dir build --output-on-failure
 
   prepare:
     name: Resolve deploy target
@@ -144,7 +111,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          # The C++ build. The Django Dockerfile that used to sit at the repo
+          # root is gone; while both existed this line silently kept shipping
+          # the Python service with a fully green pipeline.
+          file: docker/Dockerfile
           platforms: ${{ matrix.platform }}
           # No tag here: each architecture is pushed as a bare digest and the
           # merge job below is what names the result. Tagging per architecture

@@ -13,9 +13,35 @@ RUN python3 -m venv /opt/conan-venv \
 ENV PATH="/opt/conan-venv/bin:$PATH"
 RUN conan profile detect --force
 
+# Build parallelism from memory, not core count.
+#
+# -j$(nproc) put four concurrent C++ compilers on Drogon headers into node2's
+# 4 GiB. The OOM killer took the build and the runner agent with it, so the job
+# came back from GitHub as a failure with no failing step and no log — the
+# signature of a runner that stopped answering rather than a compiler that
+# returned non-zero. Every C++ service failed on arm64; the Python ones passed.
+#
+# Roughly 2 GiB per compiler, capped at 4 jobs and at the core count, never
+# fewer than one. That is -j2 on the 4 GiB Pi and -j4 on the 12-core amd64 box.
+#
+# The ceiling is deliberate rather than derived. navrobotec is a workstation
+# that also runs cluster workloads, so handing a build all 12 cores competes
+# with everything else on it. A slower build that finishes beats a fast one
+# that gets killed.
+RUN CEILING=4; \
+    JOBS=$(awk '/MemTotal/{j=int($2/2097152); if (j<1) j=1; print j}' /proc/meminfo); \
+    CORES=$(nproc); \
+    if [ "$JOBS" -gt "$CORES" ]; then JOBS="$CORES"; fi; \
+    if [ "$JOBS" -gt "$CEILING" ]; then JOBS="$CEILING"; fi; \
+    echo "$JOBS" > /build-jobs; \
+    echo "build parallelism: -j$JOBS (cores=$CORES, ceiling=$CEILING)"
+
 # Dependency files first, so a source-only change does not rebuild Drogon.
 COPY conanfile.txt CMakeLists.txt ./
-RUN conan install . --build=missing -s compiler.cppstd=17 -of=build
+# Conan compiles missing dependencies from source, so it needs the same cap:
+# building Drogon itself is heavier than building this service.
+RUN conan install . --build=missing -s compiler.cppstd=17 -of=build \
+    -c tools.build:jobs=$(cat /build-jobs)
 
 COPY . .
 
@@ -25,7 +51,7 @@ RUN cmake -S . -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_POSTGRESQL=ON \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-    && cmake --build build -j$(nproc)
+    && cmake --build build -j$(cat /build-jobs)
 
 # ----------- Runtime Stage -----------
 FROM debian:bookworm-slim AS runtime

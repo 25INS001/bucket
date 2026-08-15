@@ -26,10 +26,27 @@ env:
   DEPLOYMENT_NAME: bucket
   CONTAINER_NAME: bucket
 
+# Every job runs on self-hosted runners, including the light ones.
+#
+# GitHub-hosted minutes ran out partway through a production rollout: the two
+# Python services merged and recorded fine, the two C++ ones failed with
+# "The job was not started because recent account payments have failed or your
+# spending limit needs to be increased" -- a job with zero steps, no runner and
+# no log, which looks like an infrastructure fault rather than a billing one.
+#
+# The builds were unaffected because they were already self-hosted, so both
+# architectures were sitting in the registry with nothing left to combine them.
+# Keeping merge, test and the write-back on hosted runners meant a deploy could
+# stall on quota with the images already built.
+#
+# The cost is serialisation: one X64 runner per repository, so test, prepare,
+# the amd64 build, merge and the write-back queue behind each other. arm64 still
+# builds in parallel on node2. Slower, and free, and it cannot run out.
+
 jobs:
   test:
     name: Unit tests
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, X64]
     # No Postgres service and no Python toolchain: the service is C++/Drogon and
     # the unit suite is deliberately hermetic. S3Presigner has no database, no
     # Drogon app instance and no network, because signing is the part that has
@@ -50,7 +67,7 @@ jobs:
 
   prepare:
     name: Resolve deploy target
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, X64]
     if: github.event_name != 'pull_request'
     outputs:
       environment: ${{ steps.target.outputs.environment }}
@@ -146,7 +163,7 @@ jobs:
     name: Merge multi-arch manifest
     needs: [prepare, build]
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, X64]
     permissions:
       contents: read
       packages: write
@@ -176,7 +193,7 @@ jobs:
     name: Record deployment in git
     needs: [prepare, merge]
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, X64]
     # Five repositories push to one branch. Without a shared lock they race and
     # most attempts land on a rebase; serialising per environment is cheaper
     # than retrying, and keeps the history readable.
